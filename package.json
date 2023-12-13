@@ -1,0 +1,9 @@
+{
+  "name": "dataset-generator",
+  "dependencies": {
+    "sharp": "^0.33.0"
+  },
+  "scripts": {
+    "generate": "deno run --allow-env --allow-read --allow-run generate.ts"
+  }
+}

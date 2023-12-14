@@ -2,7 +2,7 @@
   "name": "dataset-generator",
   "type": "module",
   "dependencies": {
-    "deasync": "^0.1.29",
+    "lodash-es": "^4.17.21",
     "sharp": "^0.32.6",
     "typescript": "^5.3.3"
   },
@@ -10,7 +10,7 @@
     "generate": "ts-node --esm generate.ts"
   },
   "devDependencies": {
-    "@types/deasync": "^0.1.5",
+    "@types/lodash-es": "^4.17.12",
     "@types/node": "^20.10.4",
     "ts-node": "^10.9.2"
   }

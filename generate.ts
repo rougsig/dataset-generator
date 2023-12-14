@@ -1,6 +1,6 @@
-import sharp from 'sharp'
 import * as fs from 'fs'
-import deasync from 'deasync'
+import {get, set} from 'lodash-es'
+import sharp from 'sharp'
 
 const readDir = (path: string[]) => {
   return fs.readdirSync(path.join('/'))
@@ -18,129 +18,211 @@ const writeTextFile = (path: string[], text: string) => {
   fs.writeFileSync(path.join('/'), text)
 }
 
-const readCaptions = async () => {
-  const captions: Record<string, string> = {}
+const readCaptions = () => {
+  const captions = {}
 
   const baseDir = ['.', 'dataset', 'captions']
   for (const file of readDir(baseDir)) {
-    const key = file.slice(0, file.lastIndexOf('.'))
-    captions[key] = readTextFile([...baseDir, file])
+    const filename = file.slice(0, file.lastIndexOf('.')).split('__')
+    const text = readTextFile([...baseDir, file]).trim()
+    set(captions, filename, text)
   }
 
   return captions
 }
 
-type Image = {
-  type: 'body' | 'hair' | 'outfit' | 'shoes'
-  name: string
-  path: string
-}
+type BodyImage = { type: 'body', path: string, caption: string }
+type OutfitImage = { type: 'outfit', path: string, frontPath: string | null, caption: string }
+type ShoesImage = { type: 'shoes', path: string, caption: string }
+type HairImage = { type: 'hair', path: string | null, frontPath: string, caption: string }
 
-type Dataset = Record<Image['type'], Image[]> & {
-  captions: Record<string, string>
+type Image =
+  | BodyImage
+  | OutfitImage
+  | ShoesImage
+  | HairImage
+
+const readImages = (group: string, captions: object) => {
+  const filenames: string[][] = []
+  const dataset = {}
+
+  const baseDir = ['.', 'dataset', group]
+  for (const file of readDir(baseDir)) {
+    const filename = file.slice(0, file.lastIndexOf('.')).split('__')
+    filenames.push(filename)
+
+    const path = [...baseDir, file].join('/')
+    set(dataset, filename, path)
+  }
+
+  const images: Image[] = []
+
+  const handleBody = (filename: string[]) => {
+    const caption = get(captions, filename)
+    if (caption == null) throw new Error(`Caption not found for image: ${filename.join('__')}`)
+
+    const path = get(dataset, filename)
+    if (path == null) throw new Error(`Image not found for image: ${filename.join('__')}`)
+
+    images.push({
+      type: 'body',
+      path: path,
+      caption: caption,
+    })
+  }
+
+  const handleOutfit = (filename: string[]) => {
+    if (!(filename[1] == 'outfit_curvy' || filename[1] == 'outfit_skinny')) {
+      console.log('Skip image', filename)
+      return
+    }
+
+    const caption = get(captions, filename)
+    if (caption == null) throw new Error(`Caption not found for image: ${filename.join('__')}`)
+
+    const path = get(dataset, filename)
+    if (path == null) throw new Error(`Image not found for image: ${filename.join('__')}`)
+
+    const front = get(dataset, [filename[0], 'outfitfront', filename[1], filename[2]])
+
+    images.push({
+      type: 'outfit',
+      path: path,
+      frontPath: front ?? null,
+      caption: caption,
+    })
+  }
+
+  const handleHair = (filename: string[]) => {
+    if (filename[1] != 'hair') {
+      console.log('Skip image', filename)
+      return
+    }
+
+    const caption = get(captions, filename)
+    if (caption == null) throw new Error(`Caption not found for image: ${filename.join('__')}`)
+
+    const frontPath = get(dataset, filename)
+    if (frontPath == null) throw new Error(`Image not found for image: ${filename.join('__')}`)
+
+    const back = get(dataset, [filename[0], 'hairback', filename[2]])
+
+    images.push({
+      type: 'hair',
+      path: back ?? null,
+      frontPath: frontPath,
+      caption: caption,
+    })
+  }
+
+  const handleShoes = (filename: string[]) => {
+    const caption = get(captions, filename)
+    if (caption == null) throw new Error(`Caption not found for image: ${filename.join('__')}`)
+
+    const path = get(dataset, filename)
+    if (path == null) throw new Error(`Image not found for image: ${filename.join('__')}`)
+
+    images.push({
+      type: 'shoes',
+      path: path,
+      caption: caption,
+    })
+  }
+
+  const typeHandlers: Record<string, (filename: string[]) => void> = {
+    'OLIVE_SKINNY': handleBody,
+    'BLACK1': handleBody,
+    'CAUCASIAN': handleBody,
+    'daywear': handleOutfit,
+    'eveningwear': handleOutfit,
+    'partywear': handleOutfit,
+    'sleep': handleOutfit,
+    'hair': handleHair,
+    'shoes': handleShoes,
+  }
+
+  for (const filename of filenames) {
+    const dotIndex = filename[0].indexOf('.')
+    const type = dotIndex != -1 ? filename[0].slice(0, dotIndex) : filename[0]
+
+    const handler = typeHandlers[type]
+    if (handler == null) throw new Error(`Unknown image type: '${type}'`)
+    handler(filename)
+  }
+
+  return images
 }
 
 type GenerateHandler = (
-  {...args}: {
-    captions: Record<string, string>,
-    body: Image,
-    outfit: Image,
-    shoes: Image,
-    hair: Image,
-    index: number
-  },
+  body: BodyImage,
+  outfit: OutfitImage,
+  shoes: ShoesImage,
+  hair: HairImage,
+  index: number,
 ) => Promise<boolean>
 
 class Generator {
-  constructor(private readonly dataset: Dataset) {
-  }
-
-  private nextHair(index: number): Image {
-    return this.dataset.hair[index % this.dataset.hair.length]
+  constructor(private readonly images: Image[]) {
   }
 
   async generate(block: GenerateHandler) {
+    const bodies: BodyImage[] = []
+    const outfits: OutfitImage[] = []
+    const hairs: HairImage[] = []
+    const shoess: ShoesImage[] = []
+
+    this.images.forEach(image => {
+      switch (image.type) {
+        case 'body':
+          bodies.push(image)
+          break
+        case 'outfit':
+          outfits.push(image)
+          break
+        case 'shoes':
+          shoess.push(image)
+          break
+        case 'hair':
+          hairs.push(image)
+          break
+      }
+    })
+
+    let stopped = false
     let index = 0
 
-    for (const body of this.dataset.body) {
-      for (const outfit of this.dataset.outfit) {
-        for (const shoes of this.dataset.shoes) {
-          const hair = this.nextHair(index)
-          const stop = await block({captions: this.dataset.captions, body, outfit, shoes, hair, index})
-          index++
+    for (const body of bodies) {
+      for (const outfit of outfits) {
+        for (const shoes of shoess) {
+          const hair = hairs[index % hairs.length]
+          if (stopped) continue
 
-          if (stop) break
+          stopped = await block(body, outfit, shoes, hair, index)
+          index++
         }
       }
     }
   }
 }
 
-const readImages = async (group: string) => {
-  const dataset: Dataset = {
-    body: [],
-    hair: [],
-    outfit: [],
-    shoes: [],
-    captions: await readCaptions(),
-  }
-
-  const types: Record<string, Image['type']> = {
-    'shoes': 'shoes',
-    'hair': 'hair',
-    'eveningwear': 'outfit',
-    'partywear': 'outfit',
-    'sleep': 'outfit',
-    'daywear': 'outfit',
-    'CAUCASIAN__CAUCASIAN': 'body',
-    'BLACK1__BLACK1': 'body',
-    'OLIVE_SKINNY__OLIVE_SKINNY': 'body',
-  }
-
-  const baseDir = ['.', 'dataset', group]
-  for (const file of readDir(baseDir)) {
-    const name = file.slice(0, file.lastIndexOf('.'))
-    const path = [...baseDir, file].join('/')
-
-    const type = types[file.slice(0, file.indexOf('.'))]
-    if (type == null) throw new Error(`Unknown image type ${file}`)
-
-    dataset[type].push({
-      type: type,
-      name: name,
-      path: path,
-    })
-  }
-
-  return dataset
-}
-
 const padLeft = (num: number, count: number) => {
   return `${num}`.padStart(count, '0')
 }
 
-const runBlocking = (promise: () => Promise<unknown>) => {
-  let done = false
-  promise()
-    .then(() => console.log('DONE'))
-    .finally(() => done = true)
-  deasync.loopWhile(() => !done)
-  console.log('DONE', done)
-}
-
 const generateHandler:
   (group: string) => GenerateHandler =
-  (group) => async ({captions, body, outfit, shoes, hair, index}) => {
-    if (index > 100) return true
+  (group) => async (body, outfit, shoes, hair, index) => {
+    // if (index > 100) return true
 
+    console.log('START', index)
     const caption = [
-      captions[body.name].trim(),
+      body.caption,
       ' with ',
-      captions[hair.name].trim(),
+      hair.caption,
       ' wearing ',
-      captions[outfit.name].trim(),
+      outfit.caption,
       ', ',
-      captions[shoes.name].trim(),
+      shoes.caption,
     ]
 
     const baseDir = ['.', 'dataset', 'generated', group]
@@ -151,34 +233,37 @@ const generateHandler:
 
     writeTextFile(captionPath, caption.join(''))
 
-    runBlocking(() => {
-      console.log('start image generation', imagePath)
-      return sharp(body.path)
-        // .composite([
-        //   {input: body.path},
-        //   {input: outfit.path},
-        //   {input: shoes.path},
-        //   {input: hair.path},
-        // ])
-        // .resize(512, 960)
-        // .flatten({background: '#B6B6B6'})
-        .webp({lossless: true})
-        .toFile(imagePath.join('/'))
-    })
+    const merged = await sharp(body.path)
+      .composite(
+        [
+          {input: hair.path ?? undefined},
+          {input: body.path},
+          {input: outfit.path},
+          {input: shoes.path},
+          {input: outfit.frontPath ?? undefined},
+          {input: hair.frontPath},
+        ].filter(it => it.input != null),
+      )
+      .flatten({background: '#B6B6B6'})
+      .toBuffer()
 
+    await sharp(merged)
+      .webp({lossless: true})
+      .resize(512, 960)
+      .toFile(imagePath.join('/'))
+
+    console.log('COMPLETE', index)
     return false
   }
 
-// const skinnyGenerator = new Generator(await readImages('skinny'))
-// (async () => {
-//   try {
 //
+// --- --- ---
 //
-//   } catch (e) {
-//     console.error(e)
-//     throw e
-//   }
-// })()
 
-// const curvyGenerator = new Generator(await readImages('curvy'))
-// await curvyGenerator.generate(generateHandler('curvy'))
+const captions = readCaptions()
+
+await new Generator(readImages('skinny', captions))
+  .generate(generateHandler('skinny'))
+
+await new Generator(readImages('curvy', captions))
+  .generate(generateHandler('curvy'))

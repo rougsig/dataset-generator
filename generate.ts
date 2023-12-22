@@ -214,7 +214,7 @@ const generateHandler:
   (group) => async (body, outfit, shoes, hair, index) => {
     // if (index > 100) return true
 
-    console.log('START', index)
+    console.log('START', group, index)
     const caption = [
       body.caption,
       ' with ',
@@ -252,7 +252,7 @@ const generateHandler:
       .resize(512, 960)
       .toFile(imagePath.join('/'))
 
-    console.log('COMPLETE', index)
+    console.log('COMPLETE', group, index)
     return false
   }
 
@@ -261,9 +261,41 @@ const generateHandler:
 //
 
 const captions = readCaptions()
+const images = [
+  ...readImages('skinny', captions),
+  ...readImages('skinny', captions),
+]
 
-await new Generator(readImages('skinny', captions))
-  .generate(generateHandler('skinny'))
+const map: Record<Image['type'], Image[]> = {
+  hair: [],
+  outfit: [],
+  shoes: [],
+  body: [],
+}
 
-await new Generator(readImages('curvy', captions))
-  .generate(generateHandler('curvy'))
+images.forEach(img => map[img.type].push(img))
+
+const dump = (images: Image[], file: string) => {
+  const dumped = new Set<string>()
+
+  fs.writeFileSync(file, '')
+  images.forEach(img => {
+    if (!dumped.has(img.caption)) {
+      dumped.add(img.caption)
+      fs.appendFileSync(file, img.caption + '\r\n')
+    }
+  })
+}
+
+dump(map.hair, 'hair.txt')
+dump(map.outfit, 'outfit.txt')
+dump(map.shoes, 'shoes.txt')
+dump(map.body, 'body.txt')
+
+// await Promise.all([
+//   new Generator(readImages('skinny', captions))
+//     .generate(generateHandler('skinny')),
+//
+//   new Generator(readImages('curvy', captions))
+//     .generate(generateHandler('curvy'))
+// ])
